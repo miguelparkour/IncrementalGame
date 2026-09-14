@@ -45,7 +45,7 @@ export function createGameStore({ storage, now = Date.now }: GameStoreOptions) {
       if (command) game = applyCommand(game, command)
       if (game === previous.game) return
 
-      // Each meaningful action saves immediately; the v1 snapshot is tiny.
+      // Each meaningful action saves immediately; the snapshot is tiny.
       const saveStatus = protectExistingSave
         ? previous.saveStatus
         : (repository.save(game, timestamp) ? 'saved' : 'unavailable')

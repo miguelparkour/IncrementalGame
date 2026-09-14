@@ -1,6 +1,8 @@
-import { isGameState, type GameState } from '../game/state'
+import { createInitialState, isGameState, type GameState } from '../game/state'
+import { isAmount } from '../game/amount'
+import { unlockAchievements } from '../game/achievements'
 
-export const SAVE_VERSION = 1
+export const SAVE_VERSION = 3
 export const SAVE_KEY = 'desde-cero.save'
 
 export interface SaveData {
@@ -16,6 +18,28 @@ export type DecodeResult =
 
 function isTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function migrateLegacy(value: unknown, version: 1 | 2): GameState | null {
+  if (typeof value !== 'object' || value === null ||
+      !('money' in value) || !isAmount(value.money) ||
+      !('cans' in value) || !isAmount(value.cans) ||
+      !('toolLevel' in value) || !isAmount(value.toolLevel) || value.toolLevel > (version === 1 ? 2 : 3)) {
+    return null
+  }
+
+  // v1's reinforced hook becomes the bag upgrade. Keep all money and inventory,
+  // even above capacity; collecting stays blocked until those cans are sold.
+  // Only infer achievements evidenced by the snapshot, never an unknown sale.
+  const migrated = {
+    ...createInitialState(),
+    money: value.money,
+    cans: value.cans,
+    toolLevel: value.toolLevel,
+    achievements: version === 1 ? [] : ('achievements' in value ? value.achievements : undefined),
+  }
+  if (!isGameState(migrated)) return null
+  return version === 1 ? unlockAchievements(migrated) : migrated
 }
 
 /** Also usable by a future file export UI; no browser dependency. */
@@ -39,13 +63,14 @@ export function decodeSave(raw: string): DecodeResult {
   if (typeof data !== 'object' || data === null || !('version' in data)) {
     return { kind: 'invalid' }
   }
-  // When v2 exists, migrate known older versions here before validation.
-  if (data.version !== SAVE_VERSION) return { kind: 'unsupported-version' }
+  if (data.version !== 1 && data.version !== 2 && data.version !== SAVE_VERSION) return { kind: 'unsupported-version' }
 
-  if (!('savedAt' in data) || !isTimestamp(data.savedAt) ||
-      !('game' in data) || !isGameState(data.game)) {
+  if (!('savedAt' in data) || !isTimestamp(data.savedAt) || !('game' in data)) {
     return { kind: 'invalid' }
   }
+
+  const game = data.version === 1 || data.version === 2 ? migrateLegacy(data.game, data.version) : data.game
+  if (!isGameState(game)) return { kind: 'invalid' }
 
   return {
     kind: 'loaded',
@@ -53,7 +78,11 @@ export function decodeSave(raw: string): DecodeResult {
       version: SAVE_VERSION,
       savedAt: data.savedAt,
       // Copy only known fields; do not merge arbitrary external data into state.
-      game: { money: data.game.money, cans: data.game.cans, toolLevel: data.game.toolLevel },
+      game: {
+        money: game.money, cans: game.cans, toolLevel: game.toolLevel, achievements: [...game.achievements],
+        batOwned: game.batOwned, vagabonds: game.vagabonds, recruitHits: game.recruitHits,
+        productionRemainder: game.productionRemainder,
+      },
     },
   }
 }

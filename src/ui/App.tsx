@@ -2,16 +2,18 @@ import { useState } from 'react'
 import { useStore } from 'zustand'
 import { GAME_CONFIG } from '../game/config'
 import {
-  canBuyTool,
   canCollect,
   canSell,
+  getCapacity,
   getCansPerClick,
+  getCollectionAmount,
   getCurrentTool,
-  getNextTool,
   getSaleValue,
 } from '../game/economy'
 import type { GameStore, SaveStatus } from '../store/game-store'
 import { formatAmount, formatMoney } from './format'
+import { ProgressPanel } from './ProgressPanel'
+import { getPassiveCansPerSecond } from '../game/vagabonds'
 
 const saveMessages: Record<SaveStatus, string> = {
   saved: 'Progreso guardado en este navegador.',
@@ -28,10 +30,11 @@ export function App({ store }: { store: GameStore }) {
   const [confirmReset, setConfirmReset] = useState(false)
 
   const currentTool = getCurrentTool(game)
-  const nextTool = getNextTool(game)
   const cansPerClick = getCansPerClick(game)
+  const capacity = getCapacity(game)
+  const collectionAmount = getCollectionAmount(game)
   const saleValue = getSaleValue(game.cans)
-  const canAffordTool = canBuyTool(game)
+  const passiveRate = getPassiveCansPerSecond(game)
 
   function restart() {
     reset()
@@ -45,13 +48,13 @@ export function App({ store }: { store: GameStore }) {
           <span className="brand-mark" aria-hidden="true">↗</span>
           DESDE CERO
         </a>
-        <span className="stage">Etapa 01 <span aria-hidden="true">/</span> Por tu cuenta</span>
+        <span className="stage">Etapa 01 <span aria-hidden="true">/</span> {game.vagabonds > 0 ? 'Con ayuda' : 'Por tu cuenta'}</span>
       </header>
 
       <section className="intro" aria-labelledby="page-title">
         <p className="eyebrow">UN PEQUEÑO COMIENZO</p>
         <h1 id="page-title">Todo empieza con una lata.</h1>
-        <p>Un dólar, tus manos y algo de ingenio. Recoge, vende y reinvierte en tu primer negocio.</p>
+        <p>Sin dinero, con tus manos y algo de ingenio. Recoge, vende y reinvierte en tu primer negocio.</p>
       </section>
 
       <section className="resources" aria-label="Tus recursos" aria-live="polite" aria-atomic="true">
@@ -61,8 +64,8 @@ export function App({ store }: { store: GameStore }) {
             <dd>{formatMoney(game.money)}</dd>
           </div>
           <div className="resource">
-            <dt>Latas almacenadas</dt>
-            <dd>{formatAmount(game.cans)}</dd>
+            <dt>Latas / capacidad</dt>
+            <dd>{formatAmount(game.cans)} <span>/ {formatAmount(capacity)}</span></dd>
           </div>
           <div className="resource resource-detail">
             <dt>Latas por clic</dt>
@@ -75,11 +78,23 @@ export function App({ store }: { store: GameStore }) {
         </dl>
       </section>
 
+      {game.batOwned && (
+        <section className="passive-summary" aria-label="Vagabundos y producción">
+          <dl>
+            <div><dt>Vagabundos</dt><dd>{game.vagabonds} / {GAME_CONFIG.vagabonds.maxCount}</dd></div>
+            <div><dt>Producción automática</dt><dd>{formatAmount(passiveRate)} latas/s</dd></div>
+          </dl>
+          <p>{passiveRate > 0 && game.cans >= capacity
+            ? 'Producción en pausa: vende latas para liberar espacio.'
+            : 'Las latas se acumulan automáticamente. La venta sigue siendo manual.'}</p>
+        </section>
+      )}
+
       <div className="workspace">
         <section className="panel work-panel" aria-labelledby="work-title">
           <div className="panel-heading">
             <h2 id="work-title">A pie de calle</h2>
-            <span className="badge">Trabajo manual</span>
+            <span className="badge">{passiveRate > 0 ? 'Manual + automático' : 'Trabajo manual'}</span>
           </div>
           <p className="panel-description">Cada pequeño viaje cuenta.</p>
 
@@ -88,19 +103,29 @@ export function App({ store }: { store: GameStore }) {
             <div>
               <h3>Recoge latas</h3>
               <p id="collect-help">{currentTool
-                ? `Tu ${currentTool.name.toLocaleLowerCase('es')} recoge ${formatAmount(cansPerClick)} ${cansPerClick === 1 ? 'lata' : 'latas'} por clic.`
-                : 'Compra tu primer palo con gancho para empezar.'}</p>
+                ? `Tu ${currentTool.name.toLocaleLowerCase('es')} permite llevar hasta ${formatAmount(capacity)} latas.`
+                : 'Dos manos, dos latas. Empieza recogiendo una por clic.'}</p>
             </div>
           </div>
           <button
             className="button button-primary collect-button"
             disabled={!canCollect(game)}
-            aria-describedby="collect-help"
+            aria-describedby="collect-help capacity-help"
             onClick={() => dispatch({ type: 'collect' })}
           >
             <span>Recoger latas</span>
-            <span className="button-meta">+{formatAmount(cansPerClick)} / clic</span>
+            <span className="button-meta">{collectionAmount > 0 ? `+${formatAmount(collectionAmount)} / clic` : 'Sin espacio'}</span>
           </button>
+
+          <div className="capacity-meter">
+            <label htmlFor="carrying-capacity">Espacio ocupado <span>{formatAmount(game.cans)} / {formatAmount(capacity)} latas</span></label>
+            <progress id="carrying-capacity" max={capacity} value={Math.min(game.cans, capacity)} />
+            <p id="capacity-help">{game.cans > capacity
+              ? 'Conservas latas de tu partida anterior. Véndelas para volver a recoger.'
+              : game.cans === capacity
+                ? 'Capacidad completa. Vende tus latas para liberar espacio.'
+                : 'El último clic recoge solo las latas que caben.'}</p>
+          </div>
 
           <div className="work-step sell-step">
             <span className="step-number" aria-hidden="true">02</span>
@@ -118,50 +143,12 @@ export function App({ store }: { store: GameStore }) {
             <span>Vender todas las latas</span>
             <span className="button-meta">{saleValue === null ? 'Límite numérico' : `+${formatMoney(saleValue)}`}</span>
           </button>
-          <p className="work-note">Por ahora trabajas solo: las latas se recogen con tus clics.</p>
+          <p className="work-note">{passiveRate > 0
+            ? 'Puedes seguir recogiendo a mano mientras los vagabundos producen latas.'
+            : 'Por ahora trabajas solo: las latas se recogen con tus clics.'}</p>
         </section>
 
-        <section className="panel equipment-panel" aria-labelledby="equipment-title">
-          <div className="panel-heading">
-            <h2 id="equipment-title">Tu equipo</h2>
-          </div>
-          <p className="panel-description">Invierte en hacer mejor tu trabajo.</p>
-
-          <div className="current-tool">
-            <span className="eyebrow">HERRAMIENTA ACTUAL</span>
-            <strong>{currentTool?.name ?? 'Todavía sin herramienta'}</strong>
-            <span>{currentTool ? `${formatAmount(cansPerClick)} ${cansPerClick === 1 ? 'lata' : 'latas'} por clic` : 'Todo listo para dar el primer paso.'}</span>
-          </div>
-
-          {nextTool ? (
-            <div className="upgrade">
-              <p className="eyebrow">{currentTool ? 'SIGUIENTE MEJORA' : 'TU PRIMERA COMPRA'}</p>
-              <h3>{nextTool.name}</h3>
-              <p>{nextTool.description}</p>
-              <div className="upgrade-effect">
-                <span>Latas por clic</span>
-                <strong>{formatAmount(cansPerClick)} → {formatAmount(nextTool.cansPerClick)}</strong>
-              </div>
-              <button
-                className="button button-primary"
-                disabled={!canAffordTool}
-                onClick={() => dispatch({ type: 'buy-tool' })}
-              >
-                <span>{currentTool ? 'Mejorar gancho' : 'Comprar palo con gancho'}</span>
-                <span className="button-meta">{formatMoney(nextTool.cost)}</span>
-              </button>
-              <p className="purchase-hint">{canAffordTool
-                ? 'Tienes suficiente para dar este paso.'
-                : `Necesitas ${formatMoney(nextTool.cost)}. Recoge y vende para seguir mejorando.`}</p>
-            </div>
-          ) : (
-            <div className="upgrade complete" role="status">
-              <span className="eyebrow">PRIMER OBJETIVO CONSEGUIDO</span>
-              <h3>Una herramienta mejor. Un buen comienzo.</h3>
-              <p>Ya tienes todas las mejoras de este prototipo. Puedes seguir recogiendo y vendiendo latas.</p>
-            </div>
-          )}
-        </section>
+        <ProgressPanel game={game} dispatch={dispatch} />
       </div>
 
       <footer className="page-footer">
@@ -181,7 +168,7 @@ export function App({ store }: { store: GameStore }) {
           <button className="text-button" onClick={() => setConfirmReset(true)}>Reiniciar partida</button>
         )}
       </footer>
-      <p className="prototype-note">Prototipo 0.1 · Paso a paso, desde cero.</p>
+      <p className="prototype-note">Prototipo 0.3 · Paso a paso, desde cero.</p>
     </main>
   )
 }
